@@ -48,22 +48,22 @@ namespace asim.unity.utils.geometry
                 Vertex v2 = dcel.Vertices[indices[index + 2]];
 
                 //Find if we have an existing halfedge that points to the correct next vertex in our list, otherwise create new
-                HalfEdge he0 = FindHalfEdge(edgeWithEmptyFaceList, v0);
-                if (he0 != null && he0.Next.Origin == v1)
+                HalfEdge he0 = FindHalfEdge(edgeWithEmptyFaceList, v0, v1);
+                if (he0 != null)
                 {
                     edgeWithEmptyFaceList.Remove(he0);
                 }
                 else he0 = new HalfEdge(v0);
 
-                HalfEdge he1 = FindHalfEdge(edgeWithEmptyFaceList, v1);
-                if (he1 != null && he1.Next.Origin == v2)
+                HalfEdge he1 = FindHalfEdge(edgeWithEmptyFaceList, v1, v2);
+                if (he1 != null)
                 {
                     edgeWithEmptyFaceList.Remove(he1);
                 }
                 else he1 = new HalfEdge(v1);
 
-                HalfEdge he2 = FindHalfEdge(edgeWithEmptyFaceList, v2);
-                if (he2 != null && he2.Next.Origin == v0)
+                HalfEdge he2 = FindHalfEdge(edgeWithEmptyFaceList, v2, v0);
+                if (he2 != null)
                 {
                     edgeWithEmptyFaceList.Remove(he2);
                 }
@@ -129,6 +129,17 @@ namespace asim.unity.utils.geometry
         }
 
         /// <summary>
+        /// Get the HalfEdge in the list, define by origin, and next
+        /// </summary>
+        static HalfEdge FindHalfEdge(List<HalfEdge> list, Vertex origin, Vertex next)
+        {
+            foreach (var hewef in list)
+            {
+                if (hewef.Origin == origin && hewef.Next.Origin == next) return hewef;
+            }
+            return null;
+        }
+        /// <summary>
         /// Get the HalfEdge in the list, define by origin
         /// </summary>
         static HalfEdge FindHalfEdge(List<HalfEdge> list, Vertex origin)
@@ -144,7 +155,6 @@ namespace asim.unity.utils.geometry
         {
             public Vector3 Pos; // Position - xyz
             public HalfEdge IncidentEdge; // The outgoing halfedge that points to another vertex
-
             public Vertex(Vector3 pos)
             {
                 Pos = pos;
@@ -182,6 +192,18 @@ namespace asim.unity.utils.geometry
             }
         }
 
+        // Public
+        public List<int> GetIndicesFromHalfEdges()
+        {
+            List<int> indices = new();
+            foreach (var face in Faces)
+            {
+                indices.AddRange(WalkFace_VertexIndex(Vertices, face));
+            }
+            return indices;
+        }
+
+
         // Common Operations 
         // https://cs418.cs.illinois.edu/website/text/halfedge.html#walk-a-face
 
@@ -191,14 +213,53 @@ namespace asim.unity.utils.geometry
         public static IEnumerable<HalfEdge> WalkFace(Face face)
         {
             var starthe = face.StartHalfEdge;
-            var currehthe = starthe;
+            var currenthe = starthe;
             do
             {
-                yield return currehthe;
+                yield return currenthe;
 
-                currehthe = currehthe.Next;
+                currenthe = currenthe.Next;
 
-            } while (currehthe != starthe);
+            } while (currenthe != starthe);
+        }
+
+        /// <summary>
+        /// Returns the half edges around a given face in reverse direction
+        /// </summary>
+        public static IEnumerable<HalfEdge> WalkFaceReverse(Face face)
+        {
+            var starthe = face.StartHalfEdge;
+            var currenthe = starthe;
+            do
+            {
+                yield return currenthe;
+
+                currenthe = currenthe.Previous;
+
+            } while (currenthe != starthe);
+        }
+
+        /// <summary>
+        /// Returns the vertex index around a given face
+        /// </summary>
+        public static IEnumerable<int> WalkFace_VertexIndex(List<Vertex> Vertices, Face face)
+        {
+            var starthe = face.StartHalfEdge;
+            var currenthe = starthe;
+            int a = 0;
+            do
+            {
+                a++;
+                if (a > 100)
+                {
+                    MonoBehaviour.print("ERROR");
+                    yield break;
+                }
+                yield return Vertices.IndexOf(currenthe.Origin);
+
+                currenthe = currenthe.Next;
+
+            } while (currenthe != starthe);
         }
 
         /// <summary>
@@ -226,7 +287,7 @@ namespace asim.unity.utils.geometry
         /// </summary>
         public static bool FlipEdge(HalfEdge e)
         {
-            //Check if both side of edge has a face
+            //Pre Check 1. Check if both side of edge has a face
             var edgeFace = e.IncidentFace;
             var twinFace = e.Twin.IncidentFace;
 
@@ -235,28 +296,38 @@ namespace asim.unity.utils.geometry
             var prev = e.Previous;
             var next = e.Next;
             var twin = e.Twin;
+            var twinprev = twin.Previous;
+            var twinnext = twin.Next;
 
-            // Relink first half (edge side)
+            //1. Relink first half (edge side)
+            //1a. change face start edge just incase
             edgeFace.StartHalfEdge = prev;
-
-            prev.Next = twin.Next;
-
-            e.Origin = twin.Next.Next.Origin;
-            twin.Next.Next = e;
-            twin.Next.IncidentFace = edgeFace;
-
+            //1a. Set new starting point for edge
+            e.Origin = twinnext.Next.Origin;
+            //1b. Relink the new edge(that is part of twin side) to be prev of edge - also change the face
+            prev.Next = twinnext;
+            prev.Next.Previous = prev;
+            e.Previous = twinnext;
+            e.Previous.Next = e;
+            twinnext.IncidentFace = edgeFace;
+            //1c. Relink the prev edge to be next of edge 
             e.Next = prev;
+            prev.Previous = e;
 
-            //Relink second half (twin side)
+            //2. Relink second half (twin side)
+            //2a. change face start edge just incase
             twinFace.StartHalfEdge = twin.Previous;
-
-            twin.Previous.Next = next;
-
+            //2a. Set new starting point for twin edge
             twin.Origin = next.Next.Origin;
-            next.Next = twin;
+            //2b. Relink the new edge(that is part of edge side) to be prev of twin edge - also change the face
+            twinprev.Next = next;
+            twinprev.Next.Previous = twinprev;
+            twin.Previous = next;
+            twin.Previous.Next = twin;
             next.IncidentFace = twinFace;
-
-            twin.Next = twin.Previous;
+            //1c. Relink the prev edge to be next of edge 
+            twin.Next = twinprev;
+            twinprev.Previous = twin;
 
             return true;
         }
@@ -265,6 +336,10 @@ namespace asim.unity.utils.geometry
         // Split Edge - split the edge of two faces, to create 4 triangles, think of subdivision (triangle mesh)
 
         // Refine edge - Add a Vertex and add a new adjacent edge to the face.
+
+
+
+
 
         // Add Edge
     }
